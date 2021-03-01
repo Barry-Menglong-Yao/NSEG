@@ -12,19 +12,19 @@ from model.seq2seq import train, decode
 from pathlib import Path
 import json
 
-
+CUDA_VISIBLE_DEVICES=2
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Transformer / FastTransformer.')
 
     # dataset settings
-    parser.add_argument('--corpus', type=str, nargs='+')
+    parser.add_argument('--corpus', type=str, nargs='+',default=['nips/train.lower','nips/train.eg'])
     parser.add_argument('--lang', type=str, nargs='+', help="the suffix of the corpus, translation language")
-    parser.add_argument('--valid', type=str, nargs='+')
+    parser.add_argument('--valid', type=str, nargs='+',default=['nips/val.lower', 'nips/val.eg'])
 
-    parser.add_argument('--writetrans', type=str, help='write translations for to a file')
+    parser.add_argument('--writetrans', type=str,default='decoding/gdp0.5_gl2.devorder', help='write translations for to a file')
     parser.add_argument('--ref', type=str, help='references, word unit')
 
-    parser.add_argument('--vocab', type=str)
+    parser.add_argument('--vocab', type=str,default='nips/vocab.new.100d.lower.pt')
     parser.add_argument('--vocab_size', type=int, default=40000)
 
     parser.add_argument('--load_vocab', action='store_true', help='load a pre-computed vocabulary')
@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument('--pool', type=int, default=100, help='shuffle batches in the pool')
 
     # model name
-    parser.add_argument('--model', type=str, default='[time]', help='prefix to denote the model, nothing or [time]')
+    parser.add_argument('--model', type=str, default='gdp0.5_gl2', help='prefix to denote the model, nothing or [time]')
 
     # network settings
     parser.add_argument('--share_embed', action='store_true', default=False,
@@ -54,40 +54,40 @@ def parse_args():
     parser.add_argument('--n_layers', type=int, default=5, help='number of layers')
     parser.add_argument('--n_heads', type=int, default=2, help='number of heads')
 
-    parser.add_argument('--d_emb', type=int, default=278, help='dimention size for hidden states')
-    parser.add_argument('--d_rnn', type=int, default=507, help='dimention size for FFN')
-    parser.add_argument('--d_mlp', type=int, default=507, help='dimention size for FFN')
+    parser.add_argument('--d_emb', type=int, default=100, help='dimention size for hidden states')
+    parser.add_argument('--d_rnn', type=int, default=300, help='dimention size for FFN')
+    parser.add_argument('--d_mlp', type=int, default=300, help='dimention size for FFN')
     parser.add_argument('--senenc', default='bow', help='sentence encoder')
 
     parser.add_argument('--gnnl', default=2, type=int, help='stacked layer number')
-    parser.add_argument('--gnndp', default=0, type=float, help='self-att dropout')
+    parser.add_argument('--gnndp', default=0.5, type=float, help='self-att dropout')
     
-    parser.add_argument('--labeldim', default=100, type=int, help='label dim')
-    parser.add_argument('--agg', choices=['gate', 'att'], help='node agg method')
+    parser.add_argument('--labeldim', default=50, type=int, help='label dim')
+    parser.add_argument('--agg',default='gate', choices=['gate', 'att'], help='node agg method')
 
     parser.add_argument('--reglamb', default=0, type=float)
     parser.add_argument('--loss', default=0, type=int)
 
-    parser.add_argument('--entityemb', choices=['glove', 'lstm'])
-    parser.add_argument('--ehid', default=256, type=int)
+    parser.add_argument('--entityemb', default='glove',choices=['glove', 'lstm'])
+    parser.add_argument('--ehid', default=150, type=int)
 
     parser.add_argument('--initnn', default='standard', help='parameter init')
-    parser.add_argument('--early_stop', type=int, default=0)
+    parser.add_argument('--early_stop', type=int, default=5)
 
     # running setting
     parser.add_argument('--mode', type=str, default='train',
                         choices=['train', 'test',
                                  'distill'])  # distill : take a trained AR model and decode a training set
-    parser.add_argument('--seed', type=int, default=19920206, help='seed for randomness')
+    parser.add_argument('--seed', type=int, default=1234, help='seed for randomness')
 
     parser.add_argument('--keep_cpts', type=int, default=1, help='save n checkpoints, when 1 save best model only')
 
     # training
     # parser.add_argument('--tqdm', action="store_true", default=False) #???
     parser.add_argument('--eval_every', type=int, default=100, help='validate every * step')
-    parser.add_argument('--save_every', type=int, default=-1, help='save model every * step (5000)')
+    parser.add_argument('--save_every', type=int, default=50, help='save model every * step (5000)')
 
-    parser.add_argument('--batch_size', type=int, default=2048, help='# of tokens processed per batch')
+    parser.add_argument('--batch_size', type=int, default=16, help='# of tokens processed per batch')
     parser.add_argument('--delay', type=int, default=1, help='gradiant accumulation for delayed update for large batch')
 
     parser.add_argument('--optimizer', type=str, default='Noam')
@@ -101,21 +101,22 @@ def parse_args():
 
     # parser.add_argument('--anneal_steps', type=int, default=250000,
     #                     help='maximum steps to linearly anneal the learning rate')
-    parser.add_argument('--maximum_steps', type=int, default=5000000, help='maximum steps you take to train a model')
-    parser.add_argument('--drop_ratio', type=float, default=0.1, help='dropout ratio')
-    parser.add_argument('--input_drop_ratio', type=float, default=0.1, help='dropout ratio only for inputs')
+    parser.add_argument('--maximum_steps', type=int, default=100, help='maximum steps you take to train a model')
+    parser.add_argument('--drop_ratio', type=float, default=0.5, help='dropout ratio')
+    parser.add_argument('--input_drop_ratio', type=float, default=0.5, help='dropout ratio only for inputs')
 
     parser.add_argument('--grad_clip', type=float, default=0.0, help='gradient clipping')
     parser.add_argument('--smoothing', type=float, default=0.0, help='label smoothing')
 
     # decoding
     parser.add_argument('--length_ratio', type=float, default=2, help='maximum lengths of decoding')
-    parser.add_argument('--beam_size', type=int, default=1,
+    parser.add_argument('--beam_size', type=int, default=64,
                         help='beam-size used in Beamsearch, default using greedy decoding')
     parser.add_argument('--alpha', type=float, default=0.6, help='length normalization weights')
     # parser.add_argument('--T', type=float, default=1, help='softmax temperature when decoding')
 
-    parser.add_argument('--test', type=str, nargs='+', help='test src file')
+    parser.add_argument('--test', type=str, nargs='+', help='test src file',default=['nips/test.lower', 
+    'nips/test.eg'])
 
     # model saving/reloading, output translations
     parser.add_argument('--load_from', nargs='+', default=None, help='load from 1.modelname, 2.lastnumber, 3.number')
@@ -154,7 +155,7 @@ and then :meth:`load_state_dict` to avoid GPU RAM surge when loading a model che
 
 if __name__ == '__main__':
     args = parse_args()
-
+    print(args)
     if args.mode == 'train':
         if args.load_from is not None and len(args.load_from) == 1:
             load_from = args.load_from[0]
