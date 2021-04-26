@@ -6,7 +6,7 @@ Graph based Neural Sentence Ordering
 The following packages are needed:
 
 - Python == 3.6
-- Pytorch >= 1.0
+- Pytorch == 1.5.0
 - torchtext == 0.3
 - Stanford POS tagger or Dependency Parser
 - Glove (100 dim)
@@ -32,3 +32,12 @@ Find the nsubj and dobj to get the roles ( or just use a POS tagger and ignore t
 bash run.sh
 
 
+
+
+### 
+nsubj: nominal subject
+A nominal subject is a noun phrase which is the syntactic subject of a clause. The governor of this relation
+might not always be a verb: when the verb is a copular verb, the root of the clause is the complement of
+the copular verb, which can be an adjective or noun.
+“Clinton defeated Dole” nsubj(defeated, Clinton)
+“The baby is cute” nsubj(cute, baby)

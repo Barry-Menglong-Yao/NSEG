@@ -11,8 +11,9 @@ import time
 from model.seq2seq import train, decode
 from pathlib import Path
 import json
-
-CUDA_VISIBLE_DEVICES=2
+import os
+os.environ["CUDA_VISIBLE_DEVICES"]='1'
+ 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Transformer / FastTransformer.')
 
@@ -128,6 +129,10 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default="models")
     parser.add_argument('--decoding_path', type=str, default="decoding")
 
+    parser.add_argument("--permutation_length", type=int, default=4, help="Number of sentences in permuations")
+    parser.add_argument("--permutation_file", type=str, default='data/hamming_perms_4_patches_4_max_avg.npy', help="Number of sentences in permuations")
+
+
     return parser.parse_args()
 
 
@@ -195,30 +200,32 @@ if __name__ == '__main__':
                            sequential=True)
 
         GRAPH = GraphField(batch_first=True)
+ 
 
-        train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, graph_field=GRAPH)
 
-        dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, graph_field=GRAPH)
+        train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
+
+        dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
 
         DOC.vocab = torch.load(args.vocab)
         print('vocab {} loaded'.format(args.vocab))
         args.__dict__.update({'doc_vocab': len(DOC.vocab)})
 
         train_flag = True
-        train_real = DocIter(train_data, args.batch_size, device='cuda',
+        train_real = DocIter(train_data, args.batch_size, args.permutation_file,args.permutation_length,device='cuda',
                              train=train_flag,
                              shuffle=train_flag,
                              sort_key=lambda x: len(x.doc))
 
         devbatch = 1
-        dev_real = DocIter(dev_data, devbatch, device='cuda', batch_size_fn=None,
+        dev_real = DocIter(dev_data, devbatch, args.permutation_file,args.permutation_length,device='cuda', batch_size_fn=None,
                            train=False, repeat=False, shuffle=False, sort=False)
 
         args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
         print(args_str)
 
         print('{} Start training'.format(curtime()))
-        train(args, train_real, dev_real, (DOC, ORDER, GRAPH), checkpoint)
+        train(args, train_real, dev_real, (DOC, ORDER, GRAPH), checkpoint,args.permutation_file,args.permutation_length)
     else:
         if len(args.load_from) == 1:
             load_from = '{}.best.pt'.format(args.load_from[0])
@@ -247,8 +254,8 @@ if __name__ == '__main__':
         args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
         print(args_str)
 
-        test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH)
-        test_real = DocIter(test_data, 1, device='cuda', batch_size_fn=None,
+        test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
+        test_real = DocIter(test_data, 1,args.permutation_file,args.permutation_length, device='cuda', batch_size_fn=None,
                             train=False, repeat=False, shuffle=False, sort=False)
 
         print('{} Load data done'.format(curtime()))

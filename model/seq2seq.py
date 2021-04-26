@@ -8,7 +8,7 @@ import subprocess
 import torch.nn.functional as F
 from model.generator import Beam
 from data.data import DocField, DocDataset, DocIter
-
+from util.config import is_permutation_task
 
 class GRUCell(nn.Module):
     def __init__(self, x_dim, h_dim):
@@ -184,6 +184,9 @@ class GRNGOB(nn.Module):
             s_h = F.dropout(s_h, self.dp, self.training)
 
         return s_h, g_h
+        #1, mark the question index
+        #2, mark the paragraph senten
+
 
 
 class PointerNet(nn.Module):
@@ -208,16 +211,20 @@ class PointerNet(nn.Module):
                               layer=args.gnnl, dp=args.gnndp, agg=args.agg)
 
         d_mlp = args.d_mlp
+        mlp_output_dim=1
+        if is_permutation_task():
+            mlp_output_dim=1000
+
         self.linears = nn.ModuleList([nn.Linear(args.d_rnn, d_mlp),
                                       nn.Linear(args.d_rnn * 2, d_mlp),
-                                      nn.Linear(d_mlp, 1)])
+                                      nn.Linear(d_mlp, mlp_output_dim)])
         self.decoder = nn.LSTM(args.d_rnn, args.d_rnn, batch_first=True)
         self.critic = None
 
     def equip(self, critic):
         self.critic = critic
 
-    def forward(self, src_and_len, tgt_and_len, doc_num, ewords_and_len, elocs):
+    def forward(self, src_and_len, tgt_and_len, doc_num, ewords_and_len, elocs,permutation_lables):
         document_matrix, _, hcn, key = self.encode(src_and_len, doc_num, ewords_and_len, elocs)
 
         start = document_matrix.new_zeros(document_matrix.size(0), 1, document_matrix.size(2))
@@ -230,8 +237,8 @@ class PointerNet(nn.Module):
 
         sorted_len, ix = torch.sort(tgt_len, descending=True)
         sorted_dec_inputs = dec_inputs[ix]
-
-        packed_dec_inputs = nn.utils.rnn.pack_padded_sequence(sorted_dec_inputs, sorted_len, True)
+        #.cpu()
+        packed_dec_inputs = nn.utils.rnn.pack_padded_sequence(sorted_dec_inputs, sorted_len, True) 
         hn, cn = hcn
         sorted_hn = hn[:, ix]
         sorted_cn = cn[:, ix]
@@ -299,7 +306,7 @@ class PointerNet(nn.Module):
 
         sorted_len, ix = torch.sort(length, descending=True)
         sorted_src = src[ix]
-
+        #.cpu()
         # bi-rnn must uses pack, else needs mask
         packed_x = nn.utils.rnn.pack_padded_sequence(sorted_src, sorted_len, batch_first=True)
         x = packed_x.data
@@ -395,6 +402,91 @@ class PointerNet(nn.Module):
         self.src_embed = nn.Embedding.from_pretrained(emb, freeze=False).cuda()
 
 
+
+class PermutationPredictor(PointerNet):
+    def forward(self, src_and_len, tgt_and_len, doc_num, ewords_and_len, elocs,permutation_lables):
+        document_matrix, _, hcn, key = self.encode(src_and_len, doc_num, ewords_and_len, elocs)
+        hn, cn = hcn
+        # start = document_matrix.new_zeros(document_matrix.size(0), 1, document_matrix.size(2))
+        # target, tgt_len = tgt_and_len
+
+        # # B N-1 H
+        # dec_inputs = document_matrix[torch.arange(document_matrix.size(0)).unsqueeze(1), target[:, :-1]]
+        # # B N H
+        # dec_inputs = torch.cat((start, dec_inputs), 1)
+
+        # sorted_len, ix = torch.sort(tgt_len, descending=True)
+        # sorted_dec_inputs = dec_inputs[ix]
+ 
+        # packed_dec_inputs = nn.utils.rnn.pack_padded_sequence(sorted_dec_inputs, sorted_len, True) 
+        # hn, cn = hcn
+        # sorted_hn = hn[:, ix]
+        # sorted_cn = cn[:, ix]
+        # packed_dec_outputs, _ = self.decoder(packed_dec_inputs, (sorted_hn, sorted_cn))
+
+        # dec_outputs, _ = nn.utils.rnn.pad_packed_sequence(packed_dec_inputs, True)
+
+        # _, recovered_ix = torch.sort(ix, descending=False)
+        # dec_outputs = dec_outputs[recovered_ix]
+
+        # # B qN 1 H
+        # query = self.linears[0](dec_outputs).unsqueeze(2)
+        # # B 1 kN H
+        # key = key.unsqueeze(1)
+        # # B qN kN H
+        # e = torch.tanh(query + key)
+        # # B qN kN
+        
+
+        # # mask already pointed nodes
+        # pointed_mask = [e.new_zeros(e.size(0), 1, e.size(2)).byte()]
+
+        # for t in range(1, e.size(1)):
+        #     # B
+        #     tar = target[:, t - 1]
+        #     # B kN
+        #     pm = pointed_mask[-1].clone().detach()
+        #     pm[torch.arange(e.size(0)), :, tar] = 1
+        #     pointed_mask.append(pm)
+        # # B qN kN
+        # pointed_mask = torch.cat(pointed_mask, 1)
+
+        # pointed_mask_by_target = pointed_mask.new_zeros(pointed_mask.size(0), pointed_mask.size(2))
+        # target_mask = pointed_mask.new_zeros(pointed_mask.size(0), pointed_mask.size(1))
+
+        # for b in range(target_mask.size(0)):
+        #     pointed_mask_by_target[b, :tgt_len[b]] = 1
+        #     target_mask[b, :tgt_len[b]] = 1
+
+        # pointed_mask_by_target = pointed_mask_by_target.unsqueeze(1).expand_as(pointed_mask)
+
+        # e.masked_fill_(pointed_mask == 1, -1e9)
+
+        # e.masked_fill_(pointed_mask_by_target == 0, -1e9)
+
+
+
+        predicted_permutation_id = self.linears[2](hn).squeeze()
+        logp = F.log_softmax(predicted_permutation_id, dim=-1)
+        
+        loss = self.critic(logp, permutation_lables)
+
+         
+
+        loss = loss.sum()/permutation_lables.size(0)
+
+        return loss
+
+    def predict(self, src_and_len, doc_num, ewords_and_len, elocs):
+        document_matrix, _, hcn, key = self.encode(src_and_len, doc_num, ewords_and_len, elocs)
+        hn, cn = hcn
+        predicted_permutation_id = self.linears[2](hn).squeeze()
+        m = nn.Softmax(dim=-1)
+        classes_probability = m(predicted_permutation_id) 
+        predicted_labels = torch.argmax(classes_probability, axis=-1)
+        # predicted_labels2=int(826)  #TODO 
+        return predicted_labels         
+
 def beam_search_pointer(args, model, src_and_len, doc_num, ewords_and_len, elocs):
     sentences, _, dec_init, keys = model.encode(src_and_len, doc_num,  ewords_and_len, elocs)
 
@@ -459,12 +551,17 @@ def beam_search_pointer(args, model, src_and_len, doc_num, ewords_and_len, elocs
     return best_output
 
 
+
+
 def print_params(model):
     print('total parameters:', sum([np.prod(list(p.size())) for p in model.parameters()]))
 
 
-def train(args, train_iter, dev, fields, checkpoint):
-    model = PointerNet(args)
+def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation_length):
+    if is_permutation_task():
+        model=PermutationPredictor(args)
+    else:
+        model = PointerNet(args)
     model.cuda()
 
     DOC, ORDER, GRAPH = fields
@@ -488,10 +585,11 @@ def train(args, train_iter, dev, fields, checkpoint):
 
     early_stop = args.early_stop
 
-    test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH)
-    test_real = DocIter(test_data, 1, device='cuda', batch_size_fn=None,
+    test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=permutation_length)
+    test_real = DocIter(test_data, 1,  permutation_file, permutation_length,device='cuda', batch_size_fn=None,
                         train=False, repeat=False, shuffle=False, sort=False)
-
+    
+    
     for epc in range(args.maximum_steps):
         for iters, batch in enumerate(train_iter):
             model.train()
@@ -500,8 +598,8 @@ def train(args, train_iter, dev, fields, checkpoint):
 
             t1 = time.time()
 
-            loss = model(batch.doc, batch.order, batch.doc_len, batch.e_words, batch.elocs)
-
+            loss = model(batch.doc, batch.order, batch.doc_len, batch.e_words, batch.elocs,batch.permutation_lables)
+           
             loss.backward()
             opt.step()
 
@@ -570,83 +668,148 @@ def valid_model(args, model, dev, field, dev_metrics=None, shuflle_times=1):
 
         return sum(total_score) / number
     else:
-        f = open(args.writetrans, 'w')
+        if is_permutation_task():
+            return valid_permutation_model(args, model, dev, field, dev_metrics , shuflle_times)
+        else:
+            return valid_sentence_ordering_model(args, model, dev, field, dev_metrics , shuflle_times)
 
-        if args.beam_size != 1:
-            print('beam search with beam', args.beam_size)
 
-        best_acc = []
-        for epc in range(shuflle_times):
-            truth = []
-            predicted = []
+def valid_permutation_model(args, model, dev, field, dev_metrics , shuflle_times):
+    f = open(args.writetrans, 'w')
+    best_acc = []
+    for epc in range(shuflle_times):
+        truth = []
+        predicted = []
 
-            for j, dev_batch in enumerate(dev):
-                tru = dev_batch.order[0].view(-1).tolist()
-                truth.append(tru)
+        for j, dev_batch in enumerate(dev):
+            tru = dev_batch.permutation_lables[0]
+            truth.append(int(tru.cpu().detach() ) )
+            pred = model.predict(dev_batch.doc, dev_batch.doc_len, dev_batch.e_words, dev_batch.elocs)
+            predicted.append(int(pred.cpu().detach() ))
+        right, total = 0, 0
+        pmr_right = 0
+        taus = []
+        # pm
+        pm_p, pm_r = [], []
+        import itertools
 
-                if len(tru) == 1:
-                    pred = tru
-                else:
-                    pred = beam_search_pointer(args, model, dev_batch.doc, dev_batch.doc_len, dev_batch.e_words, dev_batch.elocs)
+        from sklearn.metrics import accuracy_score
 
-                predicted.append(pred)
-                print('{}|||{}'.format(' '.join(map(str, pred)), ' '.join(map(str, truth[-1]))),
-                      file=f)
+        for t, p in zip(truth, predicted):
+       
 
-            right, total = 0, 0
-            pmr_right = 0
-            taus = []
+            eq = np.equal(t , p )
+            right += eq.sum()
+            total += 1
+
+            pmr_right += eq.all()
+
             # pm
-            pm_p, pm_r = [], []
-            import itertools
+            # s_t = set([i for i in itertools.combinations(t, 2)])
+            # s_p = set([i for i in itertools.combinations(p, 2)])
+            # pm_p.append(len(s_t.intersection(s_p)) / len(s_p))
+            # pm_r.append(len(s_t.intersection(s_p)) / len(s_t))
 
-            from sklearn.metrics import accuracy_score
+            # cn_2 = len(p) * (len(p) - 1) / 2
+            # pairs = len(s_p) - len(s_p.intersection(s_t))
+            # tau = 1 - 2 * pairs / cn_2
+            # taus.append(tau)
 
-            for t, p in zip(truth, predicted):
-                if len(p) == 1:
-                    right += 1
-                    total += 1
-                    pmr_right += 1
-                    taus.append(1)
-                    continue
+        # acc = right / total
 
-                eq = np.equal(t, p)
-                right += eq.sum()
-                total += len(t)
+        acc = accuracy_score( truth ,
+                                 predicted   )
 
-                pmr_right += eq.all()
+        best_acc.append(acc)
 
-                # pm
-                s_t = set([i for i in itertools.combinations(t, 2)])
-                s_p = set([i for i in itertools.combinations(p, 2)])
-                pm_p.append(len(s_t.intersection(s_p)) / len(s_p))
-                pm_r.append(len(s_t.intersection(s_p)) / len(s_t))
+        # pmr = pmr_right / len(truth)
+        # taus = np.mean(taus)
 
-                cn_2 = len(p) * (len(p) - 1) / 2
-                pairs = len(s_p) - len(s_p.intersection(s_t))
-                tau = 1 - 2 * pairs / cn_2
-                taus.append(tau)
+        # pm_p = np.mean(pm_p)
+        # pm_r = np.mean(pm_r)
+        # pm = 2 * pm_p * pm_r / (pm_p + pm_r)
 
-            # acc = right / total
+        print('acc:', acc)
 
-            acc = accuracy_score(list(itertools.chain.from_iterable(truth)),
-                                 list(itertools.chain.from_iterable(predicted)))
+    f.close()
+    acc = max(best_acc)
+    return acc ,0,0,0
 
-            best_acc.append(acc)
+def valid_sentence_ordering_model(args, model, dev, field, dev_metrics , shuflle_times):
+    f = open(args.writetrans, 'w')
 
-            pmr = pmr_right / len(truth)
-            taus = np.mean(taus)
+    if args.beam_size != 1:
+        print('beam search with beam', args.beam_size)
 
-            pm_p = np.mean(pm_p)
-            pm_r = np.mean(pm_r)
-            pm = 2 * pm_p * pm_r / (pm_p + pm_r)
+    best_acc = []
+    for epc in range(shuflle_times):
+        truth = []
+        predicted = []
 
-            print('acc:', acc)
+        for j, dev_batch in enumerate(dev):
+            tru = dev_batch.order[0].view(-1).tolist()
+            truth.append(tru)
+    
+            if len(tru) == 1:
+                pred = tru
+            else:
+                pred = beam_search_pointer(args, model, dev_batch.doc, dev_batch.doc_len, dev_batch.e_words, dev_batch.elocs)
+            print('{}|||{}'.format(' '.join(map(str, pred)), ' '.join(map(str, truth[-1]))),
+                file=f)
+            predicted.append(pred)
+        right, total = 0, 0
+        pmr_right = 0
+        taus = []
+        # pm
+        pm_p, pm_r = [], []
+        import itertools
 
-        f.close()
-        acc = max(best_acc)
-        return acc, pmr, taus, pm
+        from sklearn.metrics import accuracy_score
 
+        for t, p in zip(truth, predicted):
+            if len(p) == 1:
+                right += 1
+                total += 1
+                pmr_right += 1
+                taus.append(1)
+                continue
+
+            eq = np.equal(t, p)
+            right += eq.sum()
+            total += len(t)
+
+            pmr_right += eq.all()
+
+            # pm
+            s_t = set([i for i in itertools.combinations(t, 2)])
+            s_p = set([i for i in itertools.combinations(p, 2)])
+            pm_p.append(len(s_t.intersection(s_p)) / len(s_p))
+            pm_r.append(len(s_t.intersection(s_p)) / len(s_t))
+
+            cn_2 = len(p) * (len(p) - 1) / 2
+            pairs = len(s_p) - len(s_p.intersection(s_t))
+            tau = 1 - 2 * pairs / cn_2
+            taus.append(tau)
+
+        # acc = right / total
+
+        acc = accuracy_score(list(itertools.chain.from_iterable(truth)),
+                                list(itertools.chain.from_iterable(predicted)))
+
+        best_acc.append(acc)
+
+        pmr = pmr_right / len(truth)
+        taus = np.mean(taus)
+
+        pm_p = np.mean(pm_p)
+        pm_r = np.mean(pm_r)
+        pm = 2 * pm_p * pm_r / (pm_p + pm_r)
+
+        print('acc:', acc)
+
+    f.close()
+    acc = max(best_acc)
+    return acc, pmr, taus, pm
 
 def decode(args, test_real, fields, checkpoint):
     with torch.no_grad():

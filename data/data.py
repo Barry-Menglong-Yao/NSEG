@@ -12,7 +12,9 @@ from contextlib import ExitStack
 import numpy as np
 
 from random import shuffle
-
+import random
+from util.config import is_permutation_task
+from util  import data_util
 
 class DocField(data.Field):
     def preprocess(self, x):
@@ -45,7 +47,7 @@ class GraphField(data.Field):
         return x.strip()
 
 class DocDataset(data.Dataset):
-    def __init__(self, path, text_field, order_field, graph_field,
+    def __init__(self, path, text_field, order_field, graph_field,permutation_length,
                  encoding='utf-8', **kwargs):
         fields = [('doc', text_field), ('order', order_field), ('entity', graph_field)]
         examples = []
@@ -53,19 +55,37 @@ class DocDataset(data.Dataset):
         with open(path, 'r', encoding=encoding) as f, open(einspath, 'r') as fe:
             for line, lineeins in zip(f, fe):
                 line = line.strip()
+                if is_permutation_task():
+                    if line.count('<eos>')<permutation_length-1:
+                        continue
                 order = list(range(line.count('<eos>') + 1))
+                
                 if 'train' in path:
                     if len(order) > 1:
-                        examples.append(data.Example.fromlist([line, order, lineeins], fields))
+                        examples=generate_examples(line,order,lineeins,fields,permutation_length,examples)
+                        
                 else:
-                    examples.append(data.Example.fromlist([line, order, lineeins], fields))
+                    examples=generate_examples(line,order,lineeins,fields,permutation_length,examples)
 
         super(DocDataset, self).__init__(examples, fields, **kwargs)
 
 
+
+def generate_examples(line, order, lineeins,fields,permutation_length,examples):
+    example=data.Example.fromlist([line, order, lineeins], fields)
+    sentence_num=len(example.order)
+    patch_num=sentence_num//permutation_length
+    start=0
+    end=permutation_length
+    for i in range(patch_num):
+        example_of_K_size=data_util.pick_K_sentences(example,start+i*permutation_length,end+i*permutation_length)
+        if example_of_K_size!=None:
+            examples.append(example_of_K_size)
+    return examples
+
 class MyBatch(Batch):
     def __init__(self, allsentences, orders, doc_len, ewords, elocs, dataset=None,
-                 device=None):
+                 device=None,permutation_id_list=None):
         """Create a Batch from a list of examples."""
         if data is not None:
             setattr(self, 'doc_len', doc_len)
@@ -83,7 +103,10 @@ class MyBatch(Batch):
             setattr(self, 'doc', dataset.fields['doc'].process(allsentences, device=device))
 
             setattr(self, 'e_words', dataset.fields['doc'].process(ewords, device=device))
-
+            permutation_id_list_tensor= torch.cuda.LongTensor(  permutation_id_list)
+            setattr(self, 'permutation_lables', permutation_id_list_tensor)
+            # print(permutation_id_list_tensor[0].shape)
+            # print(self.permutation_lables[0].shape)
             # setattr(self, 'docwords', dataset.fields['doc'].process(doc_words, device=device))
             # setattr(self, 'graph', dataset.fields['e2e'].process_graph(e2ebatch, e2sbatch, orders,
             #                                                            doc_sent_word_len, device=device))
@@ -95,6 +118,17 @@ class MyBatch(Batch):
             #         setattr(self, name, field.process(batch, device=device))
 
 
+ 
+def gen_permutation_list(permutation_file):
+  
+    result=np.load(permutation_file)
+    return result
+
+def choose_one_permutation(permutation_list, permutation_length):
+    permutation_id=random.randint(0,permutation_length-1)
+    cur_permutation=permutation_list[permutation_id]
+    return cur_permutation,permutation_id
+
 class DocIter(data.BucketIterator):
     def data(self):
         if self.shuffle:
@@ -102,6 +136,11 @@ class DocIter(data.BucketIterator):
         else:
             xs = self.dataset
         return xs
+
+    def __init__(self,dataset, batch_size,permutation_file,permutation_length, sort_key=None, device=None, batch_size_fn=None, train=True, repeat=False, shuffle=None, sort=None, sort_within_batch=None):
+        super().__init__(dataset,  batch_size, sort_key , device , batch_size_fn , train , repeat , shuffle , sort , sort_within_batch )
+        self.permutation_list=gen_permutation_list(permutation_file)
+        self.permutation_length=permutation_length
 
     def __iter__(self):
         while True:
@@ -124,11 +163,17 @@ class DocIter(data.BucketIterator):
 
                 ewords = []
                 elocs = []
+                permutation_id_list=[]
                 for ex in minibatch:
                     doc, order = ex.doc, ex.order
 
-                    randid = list(range(len(order)))
-                    shuffle(randid)
+     
+                    if is_permutation_task():
+                        randid,permutation_id = choose_one_permutation(self.permutation_list,self.permutation_length)
+                        permutation_id_list.append(int(permutation_id))
+                    else:
+                        randid = list(range(len(order)))
+                        shuffle(randid)
 
                     sfdoc = [doc[ri] for ri in randid]
 
@@ -164,8 +209,10 @@ class DocIter(data.BucketIterator):
                     elocs.append(newlocs)
                     ewords.append(ew)
 
+            
+
                 yield MyBatch(allsentences, orders, doc_len, ewords, elocs,
-                              self.dataset, self.device)
+                              self.dataset, self.device,permutation_id_list)
             if not self.repeat:
                 return
 

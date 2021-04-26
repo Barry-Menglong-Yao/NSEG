@@ -1,0 +1,13 @@
+data/__pycache__/data.cpython-36.pyc
+data/__pycache__/data.cpython-38.pyc
+decoding/gdp0.5_gl2.devorder
+model/__pycache__/seq2seq.cpython-36.pyc
+model/__pycache__/generator.cpython-38.pyc
+model/__pycache__/generator.cpython-36.pyc
+model/__pycache__/seq2seq.cpython-38.pyc
+util/__pycache__/config.cpython-36.pyc
+
+
+
+*.pyc
+*.json
