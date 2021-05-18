@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 def gen_args():
     parser = argparse.ArgumentParser(description="Permutations for patches")
-    parser.add_argument("--N", type=int, default=5, help="Number of permuations")
-    parser.add_argument("--M", type=int, default=3, help="Number of patches to permute")
+    parser.add_argument("--N", type=int, default=3, help="Number of permuations")
+    parser.add_argument("--M", type=int, default=5, help="Number of patches to permute")
     parser.add_argument(
         "--method",
         type=str,
@@ -73,8 +73,11 @@ def main():
         # compute the hamming distance now between the remaining and selected
         D = cdist(selected_perms, all_perms, metric="hamming")
         if args.method == "max_avg":
-            D = D.mean(axis=0)
-            j = D.argmax()
+            if D.shape[-1]>0:
+                D = D.mean(axis=0)
+                j = D.argmax()
+            else:
+                break
         elif args.method == "max_min":
             min_to_selected = D.min(axis=0)
             j = min_to_selected.argmax()

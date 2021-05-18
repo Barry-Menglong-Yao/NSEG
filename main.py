@@ -7,16 +7,16 @@ import argparse
 
 from data.data import DocField, DocDataset, DocIter, GraphField
 import time
-
+import re
 from model.seq2seq import train, decode
 from pathlib import Path
 import json
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]='2'
+
  
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Transformer / FastTransformer.')
-
+    parser.add_argument('--gpu', type=str,default='2', help='gpu')
     # dataset settings
     parser.add_argument('--corpus', type=str, nargs='+',default=['nips/train.lower','nips/train.eg'])
     parser.add_argument('--lang', type=str, nargs='+', help="the suffix of the corpus, translation language")
@@ -129,10 +129,16 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default="models")
     parser.add_argument('--decoding_path', type=str, default="decoding")
 
-    parser.add_argument("--permutation_length", type=int, default=3, help="Number of sentences in permuations")
-    parser.add_argument("--permutation_file", type=str, default='data/hamming_perms_5_patches_3_max_avg.npy', help="Number of sentences in permuations")
 
+    file='data/hamming_perms_2_patches_2_max_avg.npy'
+ 
+    temp = re.findall(r'\d+', file)
+    digits = list(map(int, temp))
+    parser.add_argument("--permutation_number", type=int, default=digits[0], help="Number of  permuations")
+    parser.add_argument("--permutation_length", type=int, default=digits[1], help="Number of sentences in permuations")
+    parser.add_argument("--permutation_file", type=str, default=file, help=" permuations file")
 
+    
     return parser.parse_args()
 
 
@@ -157,10 +163,16 @@ def override(args, load_dict, except_name):
 You can call `torch.load(.., map_location='cpu')`
 and then :meth:`load_state_dict` to avoid GPU RAM surge when loading a model checkpoint
 '''
+# def extract_permutation_args(args):
+    
+
 
 if __name__ == '__main__':
     args = parse_args()
+    # extract_permutation_args(args)
     print(args)
+    os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
+
     if args.mode == 'train':
         if args.load_from is not None and len(args.load_from) == 1:
             load_from = args.load_from[0]
@@ -203,9 +215,11 @@ if __name__ == '__main__':
  
 
 
-        train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
+        train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, 
+        graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
 
-        dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
+        dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, 
+        graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
 
         DOC.vocab = torch.load(args.vocab)
         print('vocab {} loaded'.format(args.vocab))
@@ -254,7 +268,8 @@ if __name__ == '__main__':
         args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
         print(args_str)
 
-        test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,permutation_length=args.permutation_length)
+        test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,
+        permutation_length=args.permutation_length,permutation_number=args.permutation_number)
         test_real = DocIter(test_data, 1,args.permutation_file,args.permutation_length, device='cuda', batch_size_fn=None,
                             train=False, repeat=False, shuffle=False, sort=False)
 
