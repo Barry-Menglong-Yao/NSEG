@@ -12,7 +12,7 @@ from model.seq2seq import train, decode
 from pathlib import Path
 import json
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]='1'
+os.environ["CUDA_VISIBLE_DEVICES"]='2'
  
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Transformer / FastTransformer.')
@@ -129,8 +129,8 @@ def parse_args():
     parser.add_argument('--model_path', type=str, default="models")
     parser.add_argument('--decoding_path', type=str, default="decoding")
 
-    parser.add_argument("--permutation_length", type=int, default=4, help="Number of sentences in permuations")
-    parser.add_argument("--permutation_file", type=str, default='data/hamming_perms_4_patches_4_max_avg.npy', help="Number of sentences in permuations")
+    parser.add_argument("--permutation_length", type=int, default=3, help="Number of sentences in permuations")
+    parser.add_argument("--permutation_file", type=str, default='data/hamming_perms_5_patches_3_max_avg.npy', help="Number of sentences in permuations")
 
 
     return parser.parse_args()

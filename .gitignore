@@ -11,3 +11,5 @@ util/__pycache__/config.cpython-36.pyc
 
 *.pyc
 *.json
+models/gdp0.5_gl2.best.pt
+models/*  

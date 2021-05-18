@@ -79,8 +79,8 @@ def pick_entity_of_K_sentences(entity_str,start,end):
 
 
 if __name__ == '__main__':
-    # count_sentence_length()
-    a=pick_entity_of_K_sentences('data:2-2|3-2|4-1 method:3-3|4-3 mapping:3-2|4-2',0,3)
-    print(a)
-    b=pick_entity_of_K_sentences('data:2-2|3-2|4-1 method:3-3|4-3 mapping:3-2|4-2',3,6)
-    print(b)
+    count_sentence_length()
+    # a=pick_entity_of_K_sentences('data:2-2|3-2|4-1 method:3-3|4-3 mapping:3-2|4-2',0,3)
+    # print(a)
+    # b=pick_entity_of_K_sentences('data:2-2|3-2|4-1 method:3-3|4-3 mapping:3-2|4-2',3,6)
+    # print(b)

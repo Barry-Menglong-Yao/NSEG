@@ -589,8 +589,9 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
     test_real = DocIter(test_data, 1,  permutation_file, permutation_length,device='cuda', batch_size_fn=None,
                         train=False, repeat=False, shuffle=False, sort=False)
     
-    
+    history={"acc":[],"loss":[],"val_acc":[], "epoch":[]}
     for epc in range(args.maximum_steps):
+        
         for iters, batch in enumerate(train_iter):
             model.train()
 
@@ -617,6 +618,8 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
                 print('epc:{}, loss:{:.2f} best:{:.2f}\n'.format(epc, score, best_score))
             else:
                 score, pmr, ktau, _ = valid_model(args, model, dev, DOC)
+                history["epoch"].append(epc)
+                history["acc"].append(score)
                 print('epc:{}, val acc:{:.4f} best:{:.4f} pmr:{:.2f} ktau:{:.4f}'.format(epc, score, best_score,
                                                                                               pmr, ktau))
 

@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 def gen_args():
     parser = argparse.ArgumentParser(description="Permutations for patches")
-    parser.add_argument("--N", type=int, default=4, help="Number of permuations")
-    parser.add_argument("--M", type=int, default=4, help="Number of patches to permute")
+    parser.add_argument("--N", type=int, default=5, help="Number of permuations")
+    parser.add_argument("--M", type=int, default=3, help="Number of patches to permute")
     parser.add_argument(
         "--method",
         type=str,
@@ -39,7 +39,7 @@ def gen_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default='output',
+        default='data',
         required=False,
         help="Output directory where permutations should be saved",
     )
