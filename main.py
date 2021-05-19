@@ -12,20 +12,23 @@ from model.seq2seq import train, decode
 from pathlib import Path
 import json
 import os
+from ray import tune
+from ray.tune import CLIReporter
+from ray.tune.schedulers import ASHAScheduler
+from functools import partial
 
- 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a Transformer / FastTransformer.')
-    parser.add_argument('--gpu', type=str,default='2', help='gpu')
+    parser.add_argument('--gpu', type=str,default='0,1,2,3', help='gpu')
     # dataset settings
-    parser.add_argument('--corpus', type=str, nargs='+',default=['nips/train.lower','nips/train.eg'])
+    parser.add_argument('--corpus', type=str, nargs='+',default=['/home/barry/workspace/code/referredModels/NSEG/nips/train.lower','/home/barry/workspace/code/referredModels/NSEG/nips/train.eg'])
     parser.add_argument('--lang', type=str, nargs='+', help="the suffix of the corpus, translation language")
-    parser.add_argument('--valid', type=str, nargs='+',default=['nips/val.lower', 'nips/val.eg'])
+    parser.add_argument('--valid', type=str, nargs='+',default=['/home/barry/workspace/code/referredModels/NSEG/nips/val.lower', '/home/barry/workspace/code/referredModels/NSEG/nips/val.eg'])
 
     parser.add_argument('--writetrans', type=str,default='decoding/gdp0.5_gl2.devorder', help='write translations for to a file')
     parser.add_argument('--ref', type=str, help='references, word unit')
 
-    parser.add_argument('--vocab', type=str,default='nips/vocab.new.100d.lower.pt')
+    parser.add_argument('--vocab', type=str,default='/home/barry/workspace/code/referredModels/NSEG/nips/vocab.new.100d.lower.pt')
     parser.add_argument('--vocab_size', type=int, default=40000)
 
     parser.add_argument('--load_vocab', action='store_true', help='load a pre-computed vocabulary')
@@ -76,9 +79,9 @@ def parse_args():
     parser.add_argument('--early_stop', type=int, default=5)
 
     # running setting
-    parser.add_argument('--mode', type=str, default='train',
+    parser.add_argument('--mode', type=str, default='hyper_search',
                         choices=['train', 'test',
-                                 'distill'])  # distill : take a trained AR model and decode a training set
+                                 'distill','hyper_search'])  # distill : take a trained AR model and decode a training set
     parser.add_argument('--seed', type=int, default=1234, help='seed for randomness')
 
     parser.add_argument('--keep_cpts', type=int, default=1, help='save n checkpoints, when 1 save best model only')
@@ -116,8 +119,8 @@ def parse_args():
     parser.add_argument('--alpha', type=float, default=0.6, help='length normalization weights')
     # parser.add_argument('--T', type=float, default=1, help='softmax temperature when decoding')
 
-    parser.add_argument('--test', type=str, nargs='+', help='test src file',default=['nips/test.lower', 
-    'nips/test.eg'])
+    parser.add_argument('--test', type=str, nargs='+', help='test src file',default=['/home/barry/workspace/code/referredModels/NSEG/nips/test.lower', 
+    '/home/barry/workspace/code/referredModels/NSEG/nips/test.eg'])
 
     # model saving/reloading, output translations
     parser.add_argument('--load_from', nargs='+', default=None, help='load from 1.modelname, 2.lastnumber, 3.number')
@@ -130,7 +133,7 @@ def parse_args():
     parser.add_argument('--decoding_path', type=str, default="decoding")
 
 
-    file='data/hamming_perms_2_patches_2_max_avg.npy'
+    file='/home/barry/workspace/code/referredModels/NSEG/data/hamming_perms_4_patches_4_max_avg.npy'
  
     temp = re.findall(r'\d+', file)
     digits = list(map(int, temp))
@@ -167,6 +170,154 @@ and then :meth:`load_state_dict` to avoid GPU RAM surge when loading a model che
     
 
 
+
+def train_with_hyper_search(args,num_samples=10,  gpus_per_trial=1):
+    max_num_epochs=args.maximum_steps
+    config = {
+        "lr": tune.loguniform(1e-4, 1e-1),
+        "batch_size": tune.choice([2, 4, 8, 16])
+    }
+    # config = {
+    #     "lr": tune.loguniform(1e-1, 1e-1),
+    #     "batch_size": tune.choice([ 16])
+    # }
+    scheduler = ASHAScheduler(
+        metric="loss",
+        mode="min",
+        max_t=max_num_epochs,
+        grace_period=1,
+        reduction_factor=2)
+    reporter = CLIReporter(
+        # parameter_columns=["l1", "l2", "lr", "batch_size"],
+        metric_columns=["loss", "accuracy", "training_iteration"])
+    result = tune.run(
+        partial(train_one_trail, args=args),
+        resources_per_trial={"cpu": 1, "gpu": gpus_per_trial},
+        config=config,
+        num_samples=num_samples,
+        scheduler=scheduler,
+        progress_reporter=reporter)
+
+    best_trial = result.get_best_trial("loss", "min", "last")
+    print("Best trial config: {}".format(best_trial.config))
+    print("Best trial final validation loss: {}".format(
+        best_trial.last_result["loss"]))
+    print("Best trial final validation accuracy: {}".format(
+        best_trial.last_result["accuracy"]))
+ 
+    # best_checkpoint_dir = best_trial.checkpoint.value
+    # model_state, optimizer_state = torch.load(os.path.join(
+    #     best_checkpoint_dir, "checkpoint"))
+    # test_acc = test(args,model_state)
+    # print("Best trial test set accuracy: {}".format(test_acc))
+
+def updateHyper(config,args):
+    if args!=None and config!=None:
+        args.__dict__['lr']=config['lr']
+        args.__dict__['batch_size']=config['batch_size']
+
+
+def train_one_trail(config, checkpoint_dir=None,args=None):
+    updateHyper(config,args)
+    if args.load_from is not None and len(args.load_from) == 1:
+            load_from = args.load_from[0]
+            print('{} load the checkpoint from {} for initilize or resume'.
+                    format(curtime(), load_from))
+            checkpoint = torch.load(load_from, map_location='cpu')
+    else:
+        checkpoint = None
+
+    # if not resume(initilize), only need model parameters
+    if args.resume:
+        print('update args from checkpoint')
+        load_dict = checkpoint['args'].__dict__
+        except_name = ['mode', 'resume', 'maximum_steps']
+        override(args, load_dict, tuple(except_name))
+
+    main_path = Path(args.main_path)
+    model_path = main_path / args.model_path
+    decoding_path = main_path / args.decoding_path
+
+    for path in [model_path, decoding_path]:
+        path.mkdir(parents=True, exist_ok=True)
+
+    args.model_path = str(model_path)
+    args.decoding_path = str(decoding_path)
+
+    if args.model == '[time]':
+        args.model = time.strftime("%m.%d_%H.%M.", time.gmtime())
+
+    # setup random seeds
+    set_seeds(args.seed)
+
+    # special process, shuffle each document
+    # DOC = DocField(batch_first=True, include_lengths=True, eos_token='<eos>', init_token='<bos>')
+    DOC = DocField(batch_first=True, include_lengths=True)
+    ORDER = data.Field(batch_first=True, include_lengths=True, pad_token=0, use_vocab=False,
+                        sequential=True)
+
+    GRAPH = GraphField(batch_first=True)
+
+
+
+    train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, 
+    graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
+
+    dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, 
+    graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
+
+    DOC.vocab = torch.load(args.vocab)
+    print('vocab {} loaded'.format(args.vocab))
+    args.__dict__.update({'doc_vocab': len(DOC.vocab)})
+
+    train_flag = True
+    train_real = DocIter(train_data, args.batch_size, args.permutation_file,args.permutation_length,device='cuda',
+                            train=train_flag,
+                            shuffle=train_flag,
+                            sort_key=lambda x: len(x.doc))
+
+    devbatch = 1
+    dev_real = DocIter(dev_data, devbatch, args.permutation_file,args.permutation_length,device='cuda', batch_size_fn=None,
+                        train=False, repeat=False, shuffle=False, sort=False)
+
+    args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
+    print(args_str)
+
+    print('{} Start training'.format(curtime()))
+    acc,loss=train(args, train_real, dev_real, (DOC, ORDER, GRAPH), checkpoint,args.permutation_file,args.permutation_length)
+    if args.mode=='hyper_search':
+        # with tune.checkpoint_dir(epoch) as checkpoint_dir:
+        #     path = os.path.join(checkpoint_dir, "checkpoint")
+        #     torch.save((net.state_dict(), optimizer.state_dict()), path)
+
+        tune.report(loss=loss, accuracy=acc)
+
+def test(args,model_state_dir):
+    print('{} Load test set'.format(curtime()))
+
+    DOC = DocField(batch_first=True, include_lengths=True)
+    ORDER = data.Field(batch_first=True, include_lengths=True, pad_token=0, use_vocab=False,
+                        sequential=True)
+    GRAPH = GraphField(batch_first=True)
+
+    DOC.vocab = torch.load(args.vocab)
+    print('vocab {} loaded'.format(args.vocab))
+    args.__dict__.update({'doc_vocab': len(DOC.vocab)})
+
+    args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
+    print(args_str)
+
+    test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,
+    permutation_length=args.permutation_length,permutation_number=args.permutation_number)
+    test_real = DocIter(test_data, 1,args.permutation_file,args.permutation_length, device='cuda', batch_size_fn=None,
+                        train=False, repeat=False, shuffle=False, sort=False)
+
+    print('{} Load data done'.format(curtime()))
+    start = time.time()
+    acc=decode(args, test_real, (DOC, ORDER), model_state_dir)
+    print('{} Decode done, time {} mins'.format(curtime(), (time.time() - start) / 60))
+    return acc
+
 if __name__ == '__main__':
     args = parse_args()
     # extract_permutation_args(args)
@@ -174,72 +325,9 @@ if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu
 
     if args.mode == 'train':
-        if args.load_from is not None and len(args.load_from) == 1:
-            load_from = args.load_from[0]
-            print('{} load the checkpoint from {} for initilize or resume'.
-                  format(curtime(), load_from))
-            checkpoint = torch.load(load_from, map_location='cpu')
-        else:
-            checkpoint = None
-
-        # if not resume(initilize), only need model parameters
-        if args.resume:
-            print('update args from checkpoint')
-            load_dict = checkpoint['args'].__dict__
-            except_name = ['mode', 'resume', 'maximum_steps']
-            override(args, load_dict, tuple(except_name))
-
-        main_path = Path(args.main_path)
-        model_path = main_path / args.model_path
-        decoding_path = main_path / args.decoding_path
-
-        for path in [model_path, decoding_path]:
-            path.mkdir(parents=True, exist_ok=True)
-
-        args.model_path = str(model_path)
-        args.decoding_path = str(decoding_path)
-
-        if args.model == '[time]':
-            args.model = time.strftime("%m.%d_%H.%M.", time.gmtime())
-
-        # setup random seeds
-        set_seeds(args.seed)
-
-        # special process, shuffle each document
-        # DOC = DocField(batch_first=True, include_lengths=True, eos_token='<eos>', init_token='<bos>')
-        DOC = DocField(batch_first=True, include_lengths=True)
-        ORDER = data.Field(batch_first=True, include_lengths=True, pad_token=0, use_vocab=False,
-                           sequential=True)
-
-        GRAPH = GraphField(batch_first=True)
- 
-
-
-        train_data = DocDataset(path=args.corpus, text_field=DOC, order_field=ORDER, 
-        graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
-
-        dev_data = DocDataset(path=args.valid, text_field=DOC, order_field=ORDER, 
-        graph_field=GRAPH,permutation_length=args.permutation_length,permutation_number=args.permutation_number)
-
-        DOC.vocab = torch.load(args.vocab)
-        print('vocab {} loaded'.format(args.vocab))
-        args.__dict__.update({'doc_vocab': len(DOC.vocab)})
-
-        train_flag = True
-        train_real = DocIter(train_data, args.batch_size, args.permutation_file,args.permutation_length,device='cuda',
-                             train=train_flag,
-                             shuffle=train_flag,
-                             sort_key=lambda x: len(x.doc))
-
-        devbatch = 1
-        dev_real = DocIter(dev_data, devbatch, args.permutation_file,args.permutation_length,device='cuda', batch_size_fn=None,
-                           train=False, repeat=False, shuffle=False, sort=False)
-
-        args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
-        print(args_str)
-
-        print('{} Start training'.format(curtime()))
-        train(args, train_real, dev_real, (DOC, ORDER, GRAPH), checkpoint,args.permutation_file,args.permutation_length)
+        train_one_trail(None,args =args)
+    elif args.mode=='hyper_search':
+        train_with_hyper_search(args,num_samples=10)
     else:
         if len(args.load_from) == 1:
             load_from = '{}.best.pt'.format(args.load_from[0])
@@ -254,26 +342,7 @@ if __name__ == '__main__':
         except_name = ['mode', 'load_from', 'test', 'writetrans', 'beam_size', 'batch_size']
         override(args, load_dict, tuple(except_name))
 
-        print('{} Load test set'.format(curtime()))
+        test(args,checkpoint['model'])
+    
 
-        DOC = DocField(batch_first=True, include_lengths=True)
-        ORDER = data.Field(batch_first=True, include_lengths=True, pad_token=0, use_vocab=False,
-                           sequential=True)
-        GRAPH = GraphField(batch_first=True)
 
-        DOC.vocab = torch.load(args.vocab)
-        print('vocab {} loaded'.format(args.vocab))
-        args.__dict__.update({'doc_vocab': len(DOC.vocab)})
-
-        args_str = json.dumps(args.__dict__, indent=4, sort_keys=True)
-        print(args_str)
-
-        test_data = DocDataset(path=args.test, text_field=DOC, order_field=ORDER, graph_field=GRAPH,
-        permutation_length=args.permutation_length,permutation_number=args.permutation_number)
-        test_real = DocIter(test_data, 1,args.permutation_file,args.permutation_length, device='cuda', batch_size_fn=None,
-                            train=False, repeat=False, shuffle=False, sort=False)
-
-        print('{} Load data done'.format(curtime()))
-        start = time.time()
-        decode(args, test_real, (DOC, ORDER), checkpoint)
-        print('{} Decode done, time {} mins'.format(curtime(), (time.time() - start) / 60))

@@ -9,9 +9,7 @@ import torch.nn.functional as F
 from model.generator import Beam
 from data.data import DocField, DocDataset, DocIter
 from util.config import is_permutation_task
-from ray import tune
-from ray.tune import CLIReporter
-from ray.tune.schedulers import ASHAScheduler
+
 from model.model import * 
 
 def beam_search_pointer(args, model, src_and_len, doc_num, ewords_and_len, elocs):
@@ -84,54 +82,6 @@ def print_params(model):
     print('total parameters:', sum([np.prod(list(p.size())) for p in model.parameters()]))
 
 
-def train_with_hyper_search(args, train_iter, dev, fields, checkpoint,permutation_file,permutation_length,num_samples=10, max_num_epochs=args.maximum_steps, gpus_per_trial=4):
-    data_dir = os.path.abspath("./data")
-    load_data(data_dir)
-    config = {
-        "l1": tune.sample_from(lambda _: 2 ** np.random.randint(2, 9)),
-        "l2": tune.sample_from(lambda _: 2 ** np.random.randint(2, 9)),
-        "lr": tune.loguniform(1e-4, 1e-1),
-        "batch_size": tune.choice([2, 4, 8, 16])
-    }
-    scheduler = ASHAScheduler(
-        metric="loss",
-        mode="min",
-        max_t=max_num_epochs,
-        grace_period=1,
-        reduction_factor=2)
-    reporter = CLIReporter(
-        # parameter_columns=["l1", "l2", "lr", "batch_size"],
-        metric_columns=["loss", "accuracy", "training_iteration"])
-    result = tune.run(
-        partial(train_cifar, data_dir=data_dir),
-        resources_per_trial={"cpu": 2, "gpu": gpus_per_trial},
-        config=config,
-        num_samples=num_samples,
-        scheduler=scheduler,
-        progress_reporter=reporter)
-
-    best_trial = result.get_best_trial("loss", "min", "last")
-    print("Best trial config: {}".format(best_trial.config))
-    print("Best trial final validation loss: {}".format(
-        best_trial.last_result["loss"]))
-    print("Best trial final validation accuracy: {}".format(
-        best_trial.last_result["accuracy"]))
-
-    best_trained_model = Net(best_trial.config["l1"], best_trial.config["l2"])
-    device = "cpu"
-    if torch.cuda.is_available():
-        device = "cuda:0"
-        if gpus_per_trial > 1:
-            best_trained_model = nn.DataParallel(best_trained_model)
-    best_trained_model.to(device)
-
-    best_checkpoint_dir = best_trial.checkpoint.value
-    model_state, optimizer_state = torch.load(os.path.join(
-        best_checkpoint_dir, "checkpoint"))
-    best_trained_model.load_state_dict(model_state)
-
-    test_acc = test_accuracy(best_trained_model, device)
-    print("Best trial test set accuracy: {}".format(test_acc))
 
 def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation_length):
     if is_permutation_task():
@@ -147,6 +97,7 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
     print_params(model)
     print(model)
 
+    
     wd = 1e-5
     opt = torch.optim.Adadelta(model.parameters(), lr=args.lr, rho=0.95, weight_decay=wd)
 
@@ -167,6 +118,8 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
                         train=False, repeat=False, shuffle=False, sort=False)
     
     history={"acc":[],"loss":[],"val_acc":[], "epoch":[]}
+    val_loss = 0.0
+    val_steps = 0
     for epc in range(args.maximum_steps):
         
         for iters, batch in enumerate(train_iter):
@@ -184,7 +137,8 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
             t2 = time.time()
             print('epc:{} iter:{} loss:{:.2f} t:{:.2f} lr:{:.1e}'.format(epc, iters + 1, loss, t2 - t1,
                                                                          opt.param_groups[0]['lr']))
-
+            val_loss += loss.detach().cpu().numpy()
+            val_steps += 1
         if epc < 5:
             continue
 
@@ -230,6 +184,9 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
     with torch.no_grad():
         acc, pmr, ktau, pm = valid_model(args, model, test_real, DOC, shuflle_times=1)
         print('test acc:{:.4%} pmr:{:.2%} ktau:{:.4f} pm:{:.2%}'.format(acc, pmr, ktau, pm))
+
+    loss=val_loss/val_steps
+    return acc,loss
 
 
 def valid_model(args, model, dev, field, dev_metrics=None, shuflle_times=1):
@@ -391,15 +348,16 @@ def valid_sentence_ordering_model(args, model, dev, field, dev_metrics , shuflle
     acc = max(best_acc)
     return acc, pmr, taus, pm
 
-def decode(args, test_real, fields, checkpoint):
+def decode(args, test_real, fields, model_state_dir):
     with torch.no_grad():
-        model = PointerNet(args)
+        model = PermutationPredictor(args)
         model.cuda()
 
         print('load parameters')
-        model.load_state_dict(checkpoint['model'])
+        model.load_state_dict(model_state_dir)
         DOC, ORDER = fields
         acc, pmr, ktau, _ = valid_model(args, model, test_real, DOC)
         print('test acc:{:.2%} pmr:{:.2%} ktau:{:.2f}'.format(acc, pmr, ktau))
+    return acc
 
 
