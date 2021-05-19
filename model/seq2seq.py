@@ -88,6 +88,8 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
         model=PermutationPredictor(args)
     else:
         model = PointerNet(args)
+    if checkpoint!=None:
+        model.load_state_dict( checkpoint['model'],strict =False)
     model.cuda()
 
     DOC, ORDER, GRAPH = fields
@@ -162,7 +164,13 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
                 checkpoint = {'model': model.state_dict(),
                               'args': args,
                               'loss': best_score}
-                torch.save(checkpoint, '{}/{}.best.pt'.format(args.model_path, args.model))
+                        
+                if is_permutation_task():
+                    path='{}/{}.best.pt'.format(args.model_path, args.model)
+                else:
+                    path='{}/{}.sentence_order_best.pt'.format(args.model_path, args.model)
+                torch.save(checkpoint, path)
+
 
             if early_stop and (epc - best_iter) >= early_stop:
                 print('early stop at epc {}'.format(epc))
@@ -178,7 +186,7 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
         print('best:{:.2f}, iter:{}, time:{:.1f} hours, lr:{:.1e}, '.format(best_score, best_iter, hours,
                                                                             opt.param_groups[0]['lr']))
 
-    checkpoint = torch.load('{}/{}.best.pt'.format(args.model_path, args.model), map_location='cpu')
+    checkpoint = torch.load(path, map_location='cpu')
     model.load_state_dict(checkpoint['model'])
 
     with torch.no_grad():
@@ -186,7 +194,7 @@ def train(args, train_iter, dev, fields, checkpoint,permutation_file,permutation
         print('test acc:{:.4%} pmr:{:.2%} ktau:{:.4f} pm:{:.2%}'.format(acc, pmr, ktau, pm))
 
     loss=val_loss/val_steps
-    return acc,loss
+    return best_score,loss
 
 
 def valid_model(args, model, dev, field, dev_metrics=None, shuflle_times=1):

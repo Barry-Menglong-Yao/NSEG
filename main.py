@@ -123,7 +123,7 @@ def parse_args():
     '/home/barry/workspace/code/referredModels/NSEG/nips/test.eg'])
 
     # model saving/reloading, output translations
-    parser.add_argument('--load_from', nargs='+', default=None, help='load from 1.modelname, 2.lastnumber, 3.number')
+    parser.add_argument('--load_from', nargs='+', default=['models/gdp0.5_gl2.best.pt'], help='load from 1.modelname, 2.lastnumber, 3.number')
 
     parser.add_argument('--resume', action='store_true',
                         help='when resume, need other things besides parameters')

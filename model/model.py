@@ -215,8 +215,7 @@ class PointerNet(nn.Module):
 
         d_mlp = args.d_mlp
         mlp_output_dim=1
-        if is_permutation_task():
-            mlp_output_dim=args.permutation_number
+         
 
         self.linears = nn.ModuleList([nn.Linear(args.d_rnn, d_mlp),
                                       nn.Linear(args.d_rnn * 2, d_mlp),
@@ -407,12 +406,18 @@ class PointerNet(nn.Module):
 
 
 class PermutationPredictor(PointerNet):
+    def __init__(self, args):
+        super().__init__(self,args)
+ 
+        mlp_output_dim=args.permutation_number
+        self.permutation_fc = nn.Linear(args.d_mlp, mlp_output_dim)
+
     def forward(self, src_and_len, tgt_and_len, doc_num, ewords_and_len, elocs,permutation_lables):
         document_matrix, _, hcn, key = self.encode(src_and_len, doc_num, ewords_and_len, elocs)
         hn, cn = hcn
         
 
-        predicted_permutation_id = self.linears[2](hn).squeeze()
+        predicted_permutation_id = self.permutation_fc(hn).squeeze()
         logp = F.log_softmax(predicted_permutation_id, dim=-1)
         
         loss = self.critic(logp, permutation_lables)

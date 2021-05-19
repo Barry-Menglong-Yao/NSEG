@@ -73,23 +73,26 @@ class DocDataset(data.Dataset):
 
 def generate_examples(line, order, lineeins,fields,permutation_length,permutation_number,examples,can_overlap):
     example=data.Example.fromlist([line, order, lineeins], fields)
-    sentence_num=len(example.order)
-    start=0
-    end=permutation_length
-    if can_overlap:
-        patch_num=sentence_num-permutation_length+1
-        for i in range(patch_num):
-            example_of_K_size=data_util.pick_K_sentences(example,start+i,end+i)
-            if example_of_K_size!=None:
-                for j in range(permutation_number):
-                    examples.append(example_of_K_size)
+    if is_permutation_task():
+        examples.append(example)
     else:
-        patch_num=sentence_num//permutation_length
-        for i in range(patch_num):
-            example_of_K_size=data_util.pick_K_sentences(example,start+i*permutation_length,end+i*permutation_length)
-            if example_of_K_size!=None:
-                for j in range(permutation_number):
-                    examples.append(example_of_K_size)
+        sentence_num=len(example.order)
+        start=0
+        end=permutation_length
+        if can_overlap:
+            patch_num=sentence_num-permutation_length+1
+            for i in range(patch_num):
+                example_of_K_size=data_util.pick_K_sentences(example,start+i,end+i)
+                if example_of_K_size!=None:
+                    for j in range(permutation_number):
+                        examples.append(example_of_K_size)
+        else:
+            patch_num=sentence_num//permutation_length
+            for i in range(patch_num):
+                example_of_K_size=data_util.pick_K_sentences(example,start+i*permutation_length,end+i*permutation_length)
+                if example_of_K_size!=None:
+                    for j in range(permutation_number):
+                        examples.append(example_of_K_size)
     return examples
 
 class MyBatch(Batch):
